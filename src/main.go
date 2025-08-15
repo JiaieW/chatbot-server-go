@@ -39,6 +39,7 @@ import (
 	_ "xiaozhi-server-go/src/core/providers/llm/coze"
 	_ "xiaozhi-server-go/src/core/providers/llm/ollama"
 	_ "xiaozhi-server-go/src/core/providers/llm/openai"
+	_ "xiaozhi-server-go/src/core/providers/llm/weiboai"
 	_ "xiaozhi-server-go/src/core/providers/tts/deepgram"
 	_ "xiaozhi-server-go/src/core/providers/tts/doubao"
 	_ "xiaozhi-server-go/src/core/providers/tts/edge"

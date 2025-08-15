@@ -925,7 +925,7 @@ func (h *ConnectionHandler) SpeakAndPlay(text string, textIndex int, round int) 
 		return errors.New("服务端语音已停止，无法合成语音")
 	}
 
-	if len(text) > 255 {
+	if len(text) > 255 { // todo
 		h.logger.Warn(fmt.Sprintf("文本过长，超过255字符限制，截断合成语音: %s", text))
 		text = text[:255] // 截断文本
 	}
