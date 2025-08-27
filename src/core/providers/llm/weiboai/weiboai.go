@@ -1,6 +1,7 @@
 package weiboai
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/hmac"
@@ -141,7 +142,8 @@ func (p *Provider) getTauthToken() (*TauthResponse, error) {
 	}
 
 	// 从API获取新的token
-	resp, err := p.httpClient.Get(fmt.Sprintf("http://i.api.weibo.com/tauth2/access_token.json?source=%s&ips=127.0.0.1&ttl=172800", p.appKey))
+	tokenURL := fmt.Sprintf("http://i.api.weibo.com/tauth2/access_token.json?source=%s&ips=127.0.0.1&ttl=172800", p.appKey)
+	resp, err := p.httpClient.Get(tokenURL)
 	if err != nil {
 		return nil, fmt.Errorf("获取Tauth token失败: %v", err)
 	}
@@ -246,6 +248,8 @@ func (p *Provider) Response(ctx context.Context, sessionID string, messages []ty
 		// 使用use_ext_first参数
 		params.Set("use_ext_first", "1")
 
+		// 启用流式输出
+		params.Set("stream", "true")
 		// 创建请求
 		reqURL := fmt.Sprintf("%s/completion?%s", p.baseURL, params.Encode())
 		req, err := http.NewRequestWithContext(ctx, "POST", reqURL, strings.NewReader(""))
@@ -312,46 +316,56 @@ func (p *Provider) Response(ctx context.Context, sessionID string, messages []ty
 		}
 		defer resp.Body.Close()
 
-		// 读取响应
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			responseChan <- fmt.Sprintf("【读取响应失败: %v】", err)
+		// 检查HTTP状态码
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			responseChan <- fmt.Sprintf("【HTTP错误: %d - %s】", resp.StatusCode, string(body))
 			return
 		}
 
-		// 解析响应
-		var weiboResp WeiboAIResponse
-		if err := json.Unmarshal(body, &weiboResp); err != nil {
-			responseChan <- fmt.Sprintf("【解析响应失败: %v】", err)
-			return
-		}
+		// 流式响应处理
+		scanner := bufio.NewScanner(resp.Body)
+		var lastText string
 
-		if weiboResp.Code != 200 {
-			responseChan <- fmt.Sprintf("【WeiboAI错误: %s】", weiboResp.Msg)
-			return
-		}
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line == "" {
+				continue
+			}
 
-		// 解析response_data中的内容
-		var responseData map[string]interface{}
-		if err := json.Unmarshal(weiboResp.ResponseData, &responseData); err != nil {
-			responseChan <- fmt.Sprintf("【解析响应数据失败: %v】", err)
-			return
-		}
+			// 解析每一行的JSON响应
+			var weiboResp WeiboAIResponse
+			if err := json.Unmarshal([]byte(line), &weiboResp); err != nil {
+				continue // 跳过解析失败的行
+			}
 
-		// 提取文本内容
-		if choices, ok := responseData["choices"].([]interface{}); ok && len(choices) > 0 {
-			if choice, ok := choices[0].(map[string]interface{}); ok {
-				if message, ok := choice["message"].(map[string]interface{}); ok {
-					if content, ok := message["content"].(string); ok {
-						// 流式返回内容
-						responseChan <- content
-						return
+			// 检查是否有错误响应
+			if weiboResp.Code != 200 {
+				errorMsg := "服务端网络错误，请联系开发人员排查"
+				if weiboResp.Msg != "" {
+					errorMsg = fmt.Sprintf("服务端错误: %s，请联系开发人员排查", weiboResp.Msg)
+				}
+				responseChan <- errorMsg
+				return
+			}
+
+			// 解析response_data中的内容
+			var responseData map[string]interface{}
+			if err := json.Unmarshal(weiboResp.ResponseData, &responseData); err != nil {
+				continue
+			}
+			// 提取文本内容 - 适配微博AIGC的响应格式
+			if output, ok := responseData["output"].(map[string]interface{}); ok {
+				if text, ok := output["text"].(string); ok {
+					// 只输出增量部分
+					if len(text) > len(lastText) {
+						increment := text[len(lastText):]
+						responseChan <- increment
+						lastText = text
 					}
 				}
 			}
 		}
-
-		responseChan <- "【WeiboAI响应格式异常】"
 	}()
 
 	return responseChan, nil
@@ -359,7 +373,6 @@ func (p *Provider) Response(ctx context.Context, sessionID string, messages []ty
 
 func (p *Provider) ResponseWithFunctions(ctx context.Context, sessionID string, messages []types.Message, tools []openai.Tool) (<-chan types.Response, error) {
 	responseChan := make(chan types.Response, 10)
-
 	go func() {
 		defer close(responseChan)
 
