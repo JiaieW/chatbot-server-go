@@ -29,6 +29,7 @@ import (
 	"xiaozhi-server-go/src/task"
 	"xiaozhi-server-go/src/vision"
 
+	"github.com/gin-contrib/cors"
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
 
@@ -36,6 +37,7 @@ import (
 	_ "xiaozhi-server-go/src/core/providers/asr/deepgram"
 	_ "xiaozhi-server-go/src/core/providers/asr/doubao"
 	_ "xiaozhi-server-go/src/core/providers/asr/gosherpa"
+	_ "xiaozhi-server-go/src/core/providers/asr/stepfun"
 	_ "xiaozhi-server-go/src/core/providers/llm/coze"
 	_ "xiaozhi-server-go/src/core/providers/llm/ollama"
 	_ "xiaozhi-server-go/src/core/providers/llm/openai"
@@ -56,7 +58,6 @@ func LoadConfigAndLogger() (*configs.Config, *utils.Logger, error) {
 	_, _, err := database.InitDB()
 	if err != nil {
 		fmt.Println("数据库连接失败: %v", err)
-
 	}
 	// 加载配置,默认使用.config.yaml
 	config, configPath, err := configs.LoadConfig(database.GetServerConfigDB())
@@ -188,6 +189,29 @@ func StartHttpServer(config *configs.Config, logger *utils.Logger, g *errgroup.G
 	router := gin.Default()
 	router.SetTrustedProxies([]string{"0.0.0.0"})
 
+	// 配置全局CORS中间件
+	corsConfig := cors.Config{
+		AllowOrigins: []string{"*"}, // 生产环境应指定具体域名
+		AllowMethods: []string{"GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"},
+		AllowHeaders: []string{
+			"Origin",
+			"Content-Type",
+			"Accept",
+			"Authorization",
+			"X-Requested-With",
+			"Cache-Control",
+			"X-File-Name",
+			"client-id",
+			"device-id",
+		},
+		ExposeHeaders:    []string{"Content-Length"},
+		AllowCredentials: true,
+		MaxAge:           12 * time.Hour,
+	}
+	// 应用全局CORS中间件
+	router.Use(cors.New(corsConfig))
+
+	logger.Debug("全局CORS中间件已配置，支持OPTIONS预检请求")
 	// API路由全部挂载到/api前缀下
 	apiGroup := router.Group("/api")
 	// 启动OTA服务
@@ -201,12 +225,12 @@ func StartHttpServer(config *configs.Config, logger *utils.Logger, g *errgroup.G
 	visionService, err := vision.NewDefaultVisionService(config, logger)
 	if err != nil {
 		logger.Error("Vision 服务初始化失败 %v", err)
-		//return nil, err
+		// return nil, err
 	}
 	if visionService != nil {
 		if err := visionService.Start(groupCtx, router, apiGroup); err != nil {
 			logger.Error("Vision 服务启动失败 %v", err)
-			//return nil, err
+			// return nil, err
 		}
 	}
 
